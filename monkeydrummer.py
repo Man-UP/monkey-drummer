@@ -5,7 +5,7 @@ from copy import deepcopy
 from itertools import chain
 from random import random
 
-from pygame import midi
+from midiutil.MidiFile import MIDIFile
 
 def read_drum_file(path):
     with open(path) as drum_file:
@@ -61,27 +61,25 @@ def generate_sequence(probs, length):
                 break
     return seq    
 
-def make_midi_events(seq, beat_duration, start_time, velocity=127):
-    time = start_time
-    events = []
+def write_midi_file(seq, file_path):
+    midi_file = MIDIFile(1)
+    midi_file.addTrackName(0, 0, 'drum track')
+    midi_file.addTempo(0, 0, 120)
+    time = 0
+    duration = 1 / 4
     for beat in seq:
         for drum in beat:
-            events.append(((0x99, drum, velocity), time))
-        time += beat_duration
-    return events
+            midi_file.addNote(0, 9, drum, time, duration, 127)
+        time += duration
+    with open(file_path, 'wb') as midi_output_file:
+        midi_file.writeFile(midi_output_file)
 
 def main():
     track = read_drum_file('test.drm')
-    trans = make_trans_map(track, 1)
+    trans = make_trans_map(track, 2)
     probs = make_probs_map(trans)
     seq = generate_sequence(probs, 256)
-
-    midi.init()
-    events = make_midi_events(seq, 250, midi.time()) 
-    
-    out = midi.Output(device_id=2, latency=1000)
-    out.write(events)
-    raw_input('hit return to exit')
+    write_midi_file(seq, 'test.midi')    
 
 if __name__ == '__main__':
     exit(main())
