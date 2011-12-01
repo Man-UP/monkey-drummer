@@ -1,32 +1,23 @@
 #!/usr/bin/env python2.7
 from __future__ import division
 from __future__ import print_function
+from argparse import ArgumentParser
 from copy import deepcopy
 from itertools import chain
 from random import random
+import os
+import sys
 
-from midiutil.MidiFile import MIDIFile
+import midi
 
-def read_drum_file(path):
-    with open(path) as drum_file:
-        first_line = next(drum_file).strip()
-        # - 3 to account for MIDI note number
-        track = [set() for _ in xrange(len(first_line) - 3)]
-        # stick the first line back on the file
-        for line in chain((first_line,), drum_file):
-            line = line.strip()
-            drum_note = int(line[:3])
-            for i, hit in enumerate(line[3:]):
-                if hit == 'x':
-                    track[i].add(drum_note)
-    return map(frozenset, track) 
+from midiutil import MidiFile
 
 def get_start_state(order):
     return tuple(None for _ in xrange(order))
 
-def make_trans_map(track, order=1):
+def make_trans_map(track, order=1, trans=None):
     current_state = get_start_state(order)
-    trans = {}
+    trans = {} if trans is None else trans
     for beat in track:
         next_state = tuple(b for b in chain(current_state[1:], (beat,)))
         if current_state not in trans:
@@ -36,7 +27,7 @@ def make_trans_map(track, order=1):
             to_states[next_state] = 0
         to_states[next_state] += 1
         current_state = next_state
-    return trans 
+    return trans
 
 def make_probs_map(trans):
     probs = deepcopy(trans)
@@ -59,27 +50,83 @@ def generate_sequence(probs, length):
                 seq.append(to_state[-1])
                 current_state = to_state
                 break
-    return seq    
+    return seq
 
-def write_midi_file(seq, file_path):
-    midi_file = MIDIFile(1)
-    midi_file.addTrackName(0, 0, 'drum track')
-    midi_file.addTempo(0, 0, 120)
-    time = 0
-    duration = 1 / 4
+def read_drum_file(path):
+    with open(path) as drum_file:
+        first_line = next(drum_file).strip()
+        # - 3 to account for MIDI note number
+        track = [set() for _ in xrange(len(first_line) - 3)]
+        # stick the first line back on the file
+        for line in chain((first_line,), drum_file):
+            line = line.strip()
+            drum_note = int(line[:3])
+            for i, hit in enumerate(line[3:]):
+                if hit == 'x':
+                    track[i].add(drum_note)
+    return map(frozenset, track)
+
+def read_midi_file(midi_path, track_index, channel=9, quantisation_level=1/16):
+    midi_file = midi.read_midifile(midi_path)
+    # tick beat^-1 = (tick quart^-1 * quart note^-1) / note beat^-1
+    tpb = 4 * midi_file.resolution *  quantisation_level
+    midi_track = midi_file.tracklist[track_index]
+    beats = {}
+    for event in midi_track:
+        if isinstance(event, midi.NoteOnEvent) and event.channel == channel:
+            beat_index = int(round(event.tick / tpb))
+            if beat_index not in beats:
+                beats[beat_index] = set()
+            beats[beat_index].add(event.pitch)
+    track = [frozenset() for _ in xrange(max(beats) + 1)]
+    for beat_index, beat in beats.iteritems():
+        track[beat_index] = frozenset(beat)
+    return tuple(track)
+
+def write_midi_file(seq, file_path, duration=1/16, tempo=120,
+        velocity=100):
+    midi_file = MidiFile.MIDIFile(1)
+    midi_file.addTrackName(0, 0, 'Drums')
+    midi_file.addTempo(0, 0, tempo)
+    duration *= 4
+    start = 0
     for beat in seq:
         for drum in beat:
-            midi_file.addNote(0, 9, drum, time, duration, 127)
-        time += duration
+            midi_file.addNote(0, 9, drum, start, duration, velocity)
+        start += duration
     with open(file_path, 'wb') as midi_output_file:
         midi_file.writeFile(midi_output_file)
 
-def main():
-    track = read_drum_file('test.drm')
-    trans = make_trans_map(track, 2)
+def build_argument_parser():
+    ap = ArgumentParser()
+    add = ap.add_argument
+    add('-c', '--channel', default=9, type=int)
+    add('-l', '--length', default=256, type=int)
+    add('-o', '--output_midi_path', default=os.path.expanduser('~/output.mid'))
+    add('-r', '--order', default=16, type=int)
+    add('-q', '--quantisation-level', default=16, type=int)
+    add('-t', '--tempo', default=120, type=int)
+    add('-v', '--velocity', default=100, type=int)
+    add('input_midi_path', nargs='+')
+    return ap
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv
+    ap = build_argument_parser()
+    args = ap.parse_args(args=argv[1:])
+    args.quantisation_level = 1 / float(args.quantisation_level)
+    trans = {}
+    for midi_track in args.input_midi_path:
+        midi_file_path, track_index = midi_track.split(',')
+        track = read_midi_file(midi_file_path, int(track_index),
+            channel=args.channel, quantisation_level=args.quantisation_level)
+        trans = make_trans_map(track, args.order, trans)
     probs = make_probs_map(trans)
-    seq = generate_sequence(probs, 256)
-    write_midi_file(seq, 'test.midi')    
+    seq = generate_sequence(probs, args.length)
+    write_midi_file(seq, args.output_midi_path,
+            duration=args.quantisation_level, tempo=args.tempo,
+            velocity=args.velocity)
 
 if __name__ == '__main__':
     exit(main())
