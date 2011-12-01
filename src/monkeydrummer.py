@@ -41,7 +41,10 @@ def generate_sequence(probs, length):
     current_state = get_start_state(len(next(probs.iterkeys())))
     seq = []
     for _ in xrange(length):
-        to_states = probs[current_state]
+        try:
+            to_states = probs[current_state]
+        except KeyError:
+            break
         r = random()
         cum_prob = 0
         for to_state, prob in to_states.iteritems():
@@ -66,21 +69,32 @@ def read_drum_file(path):
                     track[i].add(drum_note)
     return map(frozenset, track)
 
-def read_midi_file(midi_path, track_index, channel=9, quantisation_level=1/16):
+def read_midi_file(midi_path, channel=9, quantisation_level=1/16):
     midi_file = midi.read_midifile(midi_path)
+
+    # Find the drum tracks
+    drum_tracks = set()
+    for index, track in midi_file.tracklist.iteritems():
+        for event in track:
+            if isinstance(event, midi.NoteEvent) and event.channel == 9:
+                drum_tracks.add(index)
+                break
+
     # tick beat^-1 = (tick quart^-1 * quart note^-1) / note beat^-1
     tpb = 4 * midi_file.resolution *  quantisation_level
-    midi_track = midi_file.tracklist[track_index]
     beats = {}
-    for event in midi_track:
-        if isinstance(event, midi.NoteOnEvent) and event.channel == channel:
-            beat_index = int(round(event.tick / tpb))
-            if beat_index not in beats:
-                beats[beat_index] = set()
-            beats[beat_index].add(event.pitch)
-    track = [frozenset() for _ in xrange(max(beats) + 1)]
-    for beat_index, beat in beats.iteritems():
-        track[beat_index] = frozenset(beat)
+    for track_index in drum_tracks:
+        midi_track = midi_file.tracklist[track_index]
+        for event in midi_track:
+            if isinstance(event, midi.NoteOnEvent) and event.channel == channel:
+                beat_index = int(round(event.tick / tpb))
+                if beat_index not in beats:
+                    beats[beat_index] = set()
+                beats[beat_index].add(event.pitch)
+    if beats:
+        track = [frozenset() for _ in xrange(max(beats) + 1)]
+        for beat_index, beat in beats.iteritems():
+            track[beat_index] = frozenset(beat)
     return tuple(track)
 
 def write_midi_file(seq, file_path, duration=1/16, tempo=120,
@@ -117,11 +131,12 @@ def main(argv=None):
     args = ap.parse_args(args=argv[1:])
     args.quantisation_level = 1 / float(args.quantisation_level)
     trans = {}
-    for midi_track in args.input_midi_path:
-        midi_file_path, track_index = midi_track.split(',')
-        track = read_midi_file(midi_file_path, int(track_index),
+    for midi_file_path in args.input_midi_path:
+        print('%s...' % midi_file_path, end='')
+        track = read_midi_file(midi_file_path,
             channel=args.channel, quantisation_level=args.quantisation_level)
         trans = make_trans_map(track, args.order, trans)
+        print('done')
     probs = make_probs_map(trans)
     seq = generate_sequence(probs, args.length)
     write_midi_file(seq, args.output_midi_path,
