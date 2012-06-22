@@ -16,7 +16,8 @@ def get_start_state(order):
 
 def make_trans_map(track, order=1, trans=None):
     current_state = get_start_state(order)
-    trans = {} if trans is None else trans
+    if trans is None:
+        trans = {}
     for beat in track:
         next_state = tuple(b for b in chain(current_state[1:], (beat,)))
         if current_state not in trans:

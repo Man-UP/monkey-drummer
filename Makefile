@@ -1,6 +1,6 @@
 clean:
-	find src/ -name '*.pyc' -delete
-	find lib/ -name '*.pyc' -delete
+	find lib/ src/ -name '*.pyc' -delete
+	rm -fr test/files.ifnimidi.com/
 
 DEFAULT_GOAL := clean
 .PHONY: clean
